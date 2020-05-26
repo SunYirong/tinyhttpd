@@ -124,7 +124,8 @@ void accept_request(int client)
   }
  }
 
- //将前面分隔两份的前面那份字符串，拼接在字符串htdocs的后面之后就输出存储到数组 path 中。相当于现在 path 中存储着一个字符串
+ //将前面分隔两份的**前面那份**字符串，拼接在字符串htdocs的后面之后就输出存储到数组 path 中。相当于现在 path 中存储着一个字符串
+ //由于中间插了'\0'，所以现在url代表前面那部分字符串
  sprintf(path, "htdocs%s", url);
  
  //如果 path 数组中的这个字符串的最后一个字符是以字符 / 结尾的话，就拼接上一个"index.html"的字符串。首页的意思
@@ -253,7 +254,7 @@ void execute_cgi(int client, const char *path,
  char c;
  int numchars = 1;
  int content_length = -1;
- 
+
  //往 buf 中填东西以保证能进入下面的 while
  buf[0] = 'A'; buf[1] = '\0';
  //如果是 http 请求是 GET 方法的话读取并忽略请求剩下的内容
@@ -268,7 +269,7 @@ void execute_cgi(int client, const char *path,
   //注意这里只读完 header 的内容，body 的内容没有读
   while ((numchars > 0) && strcmp("\n", buf))
   {
-   buf[15] = '\0';
+   buf[15] = '\0';    // "Content-Length:" 有15个字符
    if (strcasecmp(buf, "Content-Length:") == 0)
     content_length = atoi(&(buf[16])); //记录 body 的长度大小
    numchars = get_line(client, buf, sizeof(buf));
@@ -373,6 +374,10 @@ void execute_cgi(int client, const char *path,
  *             the buffer to save the data in
  *             the size of the buffer
  * Returns: the number of bytes stored (excluding null) */
+
+/**
+ * 如果在sock接收缓冲区末尾没有\r或者\n或者\r\n，则buf里的字符串以\0结尾
+ * 如果遇到\r或者\n或者\r\n，则buf里的字符串以\n\0结尾
 /**********************************************************************/
 int get_line(int sock, char *buf, int size)
 {
@@ -390,11 +395,11 @@ int get_line(int sock, char *buf, int size)
   {
    if (c == '\r')
    {
-    //
-    n = recv(sock, &c, 1, MSG_PEEK);
+    //MSG_PEEK 表示从socket的接收缓冲区读取数据，但是读过之后不将数据从接收缓冲区中删除，下次调用recv仍然从这次读的地方开始读
+    n = recv(sock, &c, 1, MSG_PEEK);  
     /* DEBUG printf("%02X\n", c); */
     if ((n > 0) && (c == '\n'))
-     recv(sock, &c, 1, 0);
+     recv(sock, &c, 1, 0);    // 读掉'\n'
     else
      c = '\n';
    }
@@ -419,6 +424,7 @@ void headers(int client, const char *filename)
  char buf[1024];
  (void)filename;  /* could use filename to determine file type */
 
+// 每个send可能会发送一个tcp包，也可能多个send在网卡的buffer里聚合成一个tcp包
  strcpy(buf, "HTTP/1.0 200 OK\r\n");
  send(client, buf, strlen(buf), 0);
  strcpy(buf, SERVER_STRING);
@@ -432,6 +438,9 @@ void headers(int client, const char *filename)
 /**********************************************************************/
 /* Give a client a 404 not found status message. */
 /**********************************************************************/
+/**
+ * 疑问？
+ */
 void not_found(int client)
 {
  char buf[1024];
@@ -471,9 +480,9 @@ void serve_file(int client, const char *filename)
 
  //确保 buf 里面有东西，能进入下面的 while 循环
  buf[0] = 'A'; buf[1] = '\0';
- //循环作用是读取并忽略掉这个 http 请求后面的所有内容
+ //循环作用是读取并忽略掉这个 http 请求header剩余的内容，因为这是个get请求，所以请求body是空的
  while ((numchars > 0) && strcmp("\n", buf))  /* read & discard headers */
-  numchars = get_line(client, buf, sizeof(buf));
+  numchars = get_line(client, buf, sizeof(buf));   ////必须要读完客户端发来的头部，否则后来的send不能正常显示在浏览器中。  
 
  //打开这个传进来的这个路径所指的文件
  resource = fopen(filename, "r");
@@ -504,22 +513,20 @@ int startup(u_short *port)
  //sockaddr_in 是 IPV4的套接字地址结构。定义在<netinet/in.h>,参读《TLPI》P1202
  struct sockaddr_in name;
  
- //socket()用于创建一个用于 socket 的描述符，函数包含于<sys/socket.h>。参读《TLPI》P1153
- //这里的PF_INET其实是与 AF_INET同义，具体可以参读《TLPI》P946
- httpd = socket(PF_INET, SOCK_STREAM, 0);
+ // 创建一个socket，使用tcp/ip协议组（AF_INET）下的tcp（SOCK_STREAM）协议
+ httpd = socket(AF_INET, SOCK_STREAM, 0);
  if (httpd == -1)
   error_die("socket");
   
  memset(&name, 0, sizeof(name));
  name.sin_family = AF_INET;
- //htons()，ntohs() 和 htonl()包含于<arpa/inet.h>, 参读《TLPI》P1199
  //将*port 转换成以网络字节序表示的16位整数
  name.sin_port = htons(*port);
  //INADDR_ANY是一个 IPV4通配地址的常量，包含于<netinet/in.h>
- //大多实现都将其定义成了0.0.0.0 参读《TLPI》P1187
+ //大多实现都将其定义成了0.0.0.0 
  name.sin_addr.s_addr = htonl(INADDR_ANY);
  
- //bind()用于绑定地址与 socket。参读《TLPI》P1153
+ //bind()用于绑定地址与 socket。
  //如果传进去的sockaddr结构中的 sin_port 指定为0，这时系统会选择一个临时的端口号
  if (bind(httpd, (struct sockaddr *)&name, sizeof(name)) < 0)
   error_die("bind");
