@@ -163,6 +163,7 @@ void accept_request(int client)
    execute_cgi(client, path, method, query_string);
  }
 
+//直到运行在这里，浏览器的请求才会真正停止，意味着标签栏那个不断旋转的标志就停了, 这里关闭套接字，服务器会发送tcp fin packet
  close(client);
 }
 
